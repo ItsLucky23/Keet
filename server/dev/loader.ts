@@ -3,7 +3,9 @@ import path from "path";
 import { createRequire } from 'module';
 import tryCatch from "../functions/tryCatch";
 import { getInputTypeFromFile, getSyncClientDataType } from './typeMap/extractors';
+import { invalidateProgramCache } from './typeMap/tsProgram';
 import { SERVER_FUNCTIONS_DIR, SRC_DIR } from '../utils/paths';
+import { clearRuntimeTypeResolverCache } from '../utils/runtimeTypeResolver';
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -74,6 +76,8 @@ const resolveFunctionModule = (loadedModule: any, fileName: string) => {
 
 export const initializeApis = async () => {
   Object.keys(devApis).forEach((key) => delete devApis[key]);
+  invalidateProgramCache();
+  clearRuntimeTypeResolverCache();
   const srcFolder = fs.readdirSync(SRC_DIR);
 
   for (const file of srcFolder) {
@@ -135,6 +139,8 @@ const scanApiFolder = async (file: string, basePath = "") => {
 
 export const initializeSyncs = async () => {
   Object.keys(devSyncs).forEach((key) => delete devSyncs[key]);
+  invalidateProgramCache();
+  clearRuntimeTypeResolverCache();
   const srcFolder = fs.readdirSync(SRC_DIR);
 
   for (const file of srcFolder) {
