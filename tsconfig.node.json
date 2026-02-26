@@ -2,7 +2,9 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": [
-      "ES2023"
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
     ], /* Specific library for Node environment tools */
     "allowJs": true, /* Allow JavaScript files. */
     "checkJs": false, /* Disable check JS. */

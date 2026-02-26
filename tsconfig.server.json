@@ -23,7 +23,12 @@
       "shared/*": [
         "./shared/*"
       ]
-    }
+    },
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
   },
   "include": [
     "server/**/*",

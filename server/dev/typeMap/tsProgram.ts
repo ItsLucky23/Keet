@@ -27,16 +27,38 @@ export const invalidateProgramCache = (): void => {
 
 const DEPTH_LIMIT = 12;
 
+const JSON_TYPE_NAMES = new Set([
+  'Json',
+  'JsonValue',
+  'JsonObject',
+  'JsonArray',
+  'InputJsonValue',
+  'InputJsonObject',
+  'InputJsonArray',
+]);
+
 // Generic containers we never recursively expand (their internal shape is irrelevant to API types)
 const SKIP_EXPANSION = new Set([
   'Promise', 'Map', 'WeakMap', 'Set', 'WeakSet',
   'Error', 'Date', 'RegExp', 'Buffer', 'ArrayBuffer', 'ReadonlyArray',
 ]);
 
+const isJsonLikeType = (type: ts.Type, checker: ts.TypeChecker): boolean => {
+  const symbolName = type.symbol?.name || '';
+  const aliasName = type.aliasSymbol?.name || '';
+
+  if (JSON_TYPE_NAMES.has(symbolName) || JSON_TYPE_NAMES.has(aliasName)) return true;
+
+  const rendered = checker.typeToString(type);
+  return /(\bPrisma\.)?(Input)?Json(Value|Object|Array)\b/.test(rendered);
+};
+
 // Recursively expand a TypeScript type to an inline type string with no named references.
 // The result is self-contained and requires no imports.
 export const expandType = (type: ts.Type, checker: ts.TypeChecker, depth = 0): string => {
   if (depth > DEPTH_LIMIT) return checker.typeToString(type);
+
+  if (isJsonLikeType(type, checker)) return 'JsonValue';
 
   // String literals ('hello') — use single quotes for consistency with the codebase
   if (type.isStringLiteral()) return `'${type.value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;

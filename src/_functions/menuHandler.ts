@@ -7,24 +7,43 @@ interface MenuOptions {
   size?: 'sm' | 'md' | 'lg';
 }
 
-let handler: ReturnType<typeof useMenuHandler> | null = null;
-export const setMenuHandlerRef = (ref: ReturnType<typeof useMenuHandler>) => {
-  handler = ref;
+type MenuHandlerRef = ReturnType<typeof useMenuHandler> | null;
+
+const MENU_HANDLER_KEY = '__MATCHRIX_MENU_HANDLER__';
+const globalStore = globalThis as typeof globalThis & { [MENU_HANDLER_KEY]?: MenuHandlerRef };
+
+if (globalStore[MENU_HANDLER_KEY] === undefined) {
+  globalStore[MENU_HANDLER_KEY] = null;
+}
+
+const getHandler = () => globalStore[MENU_HANDLER_KEY] ?? null;
+
+export const setMenuHandlerRef = (ref: MenuHandlerRef) => {
+  globalStore[MENU_HANDLER_KEY] = ref;
+};
+
+const waitForHandler = async () => {
+  for (let i = 0; i < 15; i++) {
+    const ref = getHandler();
+    if (ref) return ref;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('MenuHandler is not initialized');
 };
 
 export const menuHandler = {
   open: async (component: ReactElement, options?: MenuOptions) => {
-    if (!handler) throw new Error('MenuHandler is not initialized');
+    const handler = await waitForHandler();
     return await handler.open(component, options);
   },
   replace: async (component: ReactElement, options?: MenuOptions) => {
-    if (!handler) throw new Error('MenuHandler is not initialized');
+    const handler = await waitForHandler();
     return await handler.replace(component, options);
   },
   close: (success?: boolean) => {
-    handler?.close();
+    getHandler()?.close();
     return success;
   },
-  closeAll: () => handler?.closeAll(),
-  logStack: () => handler?.logStack()
+  closeAll: () => getHandler()?.closeAll(),
+  logStack: () => getHandler()?.logStack()
 };

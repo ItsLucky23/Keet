@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- tells linting to not get upset for exporting a non react hook in this file */
-import { createContext, use, useState, ReactNode, ReactElement, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import { createContext, use, useState, ReactNode, ReactElement, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { v4 as uuidv4 } from 'uuid';
+import { setMenuHandlerRef } from 'src/_functions/menuHandler';
 
 // Types
 interface MenuEntry {
@@ -60,22 +61,14 @@ const SlideInWrapper = ({ children, options, isTop, isClosing, soonIsTop }: Slid
     }
   }, [isTop, isClosing, soonIsTop, location]);
 
-  const translate =
-    location === 'center'
-      ? '0 0'
-      : (location === 'left'
-        ? '-100% 0'
-        : '100% 0'); // initial
-
   const isVisible = !isClosing;
 
   return (
     <div
-      className={`w-full overflow-hidden absolute flex flex-col text-black transition-all duration-200 origin-center
+      className={`w-full overflow-hidden absolute flex flex-col text-text-primary transition-all duration-200 origin-center
         ${isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none'}
         ${options.background ?? ''}
       `}
-      style={{ translate }}
     >
       {children}
     </div>
@@ -93,6 +86,7 @@ export function useMenuHandler() {
 
 export function MenuHandlerProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<MenuEntry[]>([]);
+  const attemptToCloseAllRef = useRef(false);
 
   const open = useCallback((element: ReactElement, options: MenuOptions = {}) => {
     return new Promise<unknown>((resolve) => {
@@ -118,8 +112,8 @@ export function MenuHandlerProvider({ children }: { children: ReactNode }) {
       if (prev.length === 0) return prev;
       const lastitem = prev.length === 1;
       const newStack = [...prev];
-      const top = newStack.at(-1);
-      const second = newStack.at(-2);
+      const top = newStack[newStack.length - 1];
+      const second = newStack[newStack.length - 2];
 
       if (!top) return prev;
 
@@ -140,14 +134,19 @@ export function MenuHandlerProvider({ children }: { children: ReactNode }) {
       // Delay removal for animation
       setTimeout(() => {
         setStack((current) => {
-          const last = current.at(-1);
-          const tempSecond = current.at(-2);
-          if (last?.id === top.id && last.isClosing) {
-            last.resolver?.(null);
-            if (tempSecond?.soonIsTop && tempSecond.id === second?.id) {
-              current[current.length - 2] = { ...tempSecond, soonIsTop: false };
+          const lastIndex = current.findIndex(s => s.id === top.id);
+          if (lastIndex !== -1 && current[lastIndex].isClosing) {
+            current[lastIndex].resolver?.(null);
+            
+            // If there's a second item, and it was marked as soonIsTop, update it
+            if (second) {
+              const secondIndex = current.findIndex(s => s.id === second.id);
+              if (secondIndex !== -1 && current[secondIndex].soonIsTop) {
+                current[secondIndex] = { ...current[secondIndex], soonIsTop: false };
+              }
             }
-            return current.slice(0, -1);
+
+            return current.filter(s => s.id !== top.id);
           }
           return current;
         });
@@ -169,37 +168,70 @@ export function MenuHandlerProvider({ children }: { children: ReactNode }) {
     console.log('Menu stack:', stack.map(s => s.id));
   }, [stack]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    globalThis.addEventListener('keydown', handleKeyDown);
-    return () => { globalThis.removeEventListener('keydown', handleKeyDown); };
-  }, [close]);
 
-  const stackTop = stack.at(-1);
+
+  const stackTop = stack[stack.length - 1];
   const sizeClass = stackTop?.options.size
     ? { sm: '384px', md: '512px', lg: '768px' }[stackTop.options.size]
     : '384px';
 
   const [lastChildHeight, setLastChildHeight] = useState<number>(0);
 
-  useEffect(() => {
-    const lastChild = document.querySelector('#MENUHANDLER')?.lastElementChild;
-    if (lastChild) {
-      const maxHeight = window.innerHeight * 0.9;
-      const height = Math.min(lastChild.clientHeight, maxHeight);
-      setLastChildHeight(height);
-    } else {
+  const updateLastChildHeight = useCallback(() => {
+    const lastChild = document.querySelector('#MENUHANDLER')?.lastElementChild as HTMLElement | null;
+    if (!lastChild) {
       setLastChildHeight(0);
+      return;
     }
-  }, [stack]);
 
-  let attempToCloseAll = false;
+    const maxHeight = window.innerHeight * 0.9;
+    const height = Math.min(lastChild.clientHeight, maxHeight);
+    setLastChildHeight(height);
+  }, []);
+
+  useLayoutEffect(() => {
+    updateLastChildHeight();
+
+    const target = document.querySelector('#MENUHANDLER') as HTMLElement | null;
+    if (!target) return;
+
+    const observer = new ResizeObserver(() => {
+      updateLastChildHeight();
+    });
+
+    observer.observe(target);
+    const lastChild = target.lastElementChild as HTMLElement | null;
+    if (lastChild) {
+      observer.observe(lastChild);
+    }
+
+    const onResize = () => updateLastChildHeight();
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
+  }, [stack.length, updateLastChildHeight]);
 
   const contextValue = useMemo(() => ({
     open, replace, close, closeAll, logStack
   }), [open, replace, close, closeAll, logStack]);
+
+  useEffect(() => {
+    setMenuHandlerRef(contextValue);
+    return () => {
+      setMenuHandlerRef(null);
+    };
+  }, [contextValue]);
+
+  useEffect(() => {
+    if (!import.meta.hot) return;
+    import.meta.hot.dispose(() => {
+      setStack([]);
+      setMenuHandlerRef(null);
+    });
+  }, []);
 
   return (
     <MenuHandlerContext value={contextValue}>
@@ -208,22 +240,23 @@ export function MenuHandlerProvider({ children }: { children: ReactNode }) {
         <div
           role="button"
           tabIndex={0}
-          className={`absolute top-0 left-0 w-full h-full flex items-center justify-center z-[1000] overflow-hidden ${stack.length === 0 ? 'pointer-events-none' : ''}`}
-          style={{ backgroundColor: stackTop?.options.dimBackground === true ? 'rgba(0, 0, 0, 0.7)' : 'transparent' }}
-          onMouseDown={() => { attempToCloseAll = true; }}
+          className={`absolute top-0 left-0 w-full h-full flex items-center justify-center z-[1000] overflow-hidden transition-colors duration-200 ${stack.length === 0 ? 'pointer-events-none' : ''}`}
+          style={{ backgroundColor: stackTop && !stackTop.isClosing && stackTop.options.dimBackground === true ? 'rgba(0, 0, 0, 0.7)' : 'transparent' }}
+          onMouseDown={() => { attemptToCloseAllRef.current = true; }}
           onMouseUp={() => {
-            if (!attempToCloseAll) { return }
+            if (!attemptToCloseAllRef.current) { return }
+            attemptToCloseAllRef.current = false;
             closeAll();
           }}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') closeAll(); }}
         >
           <div
             role="presentation"
             id="MENUHANDLER"
-            className={`rounded-md overflow-hidden relative h-auto`}
+            className={`rounded-md overflow-hidden relative transition-all duration-200 ${stackTop && !stackTop.isClosing ? 'scale-100 opacity-100' : 'scale-95 opacity-0 pointer-events-none'}`}
             style={{ width: sizeClass, height: `${String(lastChildHeight)}px` }}
             onMouseDown={(e) => { e.stopPropagation(); }}
             onMouseUp={(e) => { e.stopPropagation(); }}
+            onKeyDown={(e) => { e.stopPropagation(); }}
           >
             {stack.map((entry, index) => (
               <SlideInWrapper
