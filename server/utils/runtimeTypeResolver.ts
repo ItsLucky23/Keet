@@ -93,7 +93,7 @@ const parseObjectFields = (typeText: string): ObjectField[] => {
     if (char === ';' && depth === 0) {
       const trimmed = part.trim();
       if (trimmed) {
-        const match = trimmed.match(/^(["']?[A-Za-z_][A-Za-z0-9_]*["']?)(\?)?\s*:\s*(.+)$/);
+        const match = trimmed.match(/^(["']?[A-Za-z_][A-Za-z0-9_]*["']?)(\?)?\s*:\s*([\s\S]+)$/);
         if (match) {
           fields.push({
             key: match[1].replace(/^['"]|['"]$/g, ''),
@@ -111,7 +111,7 @@ const parseObjectFields = (typeText: string): ObjectField[] => {
 
   const final = part.trim();
   if (final) {
-    const match = final.match(/^(["']?[A-Za-z_][A-Za-z0-9_]*["']?)(\?)?\s*:\s*(.+)$/);
+    const match = final.match(/^(["']?[A-Za-z_][A-Za-z0-9_]*["']?)(\?)?\s*:\s*([\s\S]+)$/);
     if (match) {
       fields.push({
         key: match[1].replace(/^['"]|['"]$/g, ''),

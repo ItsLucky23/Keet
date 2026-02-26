@@ -52,7 +52,7 @@ const parseObjectFields = (typeText: string): Array<{ key: string; optional: boo
     if (char === ';' && depth === 0) {
       const trimmed = part.trim();
       if (trimmed) {
-        const match = trimmed.match(/^(\w+)(\?)?\s*:\s*(.+)$/);
+        const match = trimmed.match(/^(\w+)(\?)?\s*:\s*([\s\S]+)$/);
         if (match) {
           fields.push({ key: match[1], optional: Boolean(match[2]), type: match[3].trim() });
         }
@@ -66,7 +66,7 @@ const parseObjectFields = (typeText: string): Array<{ key: string; optional: boo
 
   const final = part.trim();
   if (final) {
-    const match = final.match(/^(\w+)(\?)?\s*:\s*(.+)$/);
+    const match = final.match(/^(\w+)(\?)?\s*:\s*([\s\S]+)$/);
     if (match) {
       fields.push({ key: match[1], optional: Boolean(match[2]), type: match[3].trim() });
     }
