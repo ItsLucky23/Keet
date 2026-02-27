@@ -34,9 +34,17 @@ const saveSession = async (token: string, data: SessionLayout, newUser?: boolean
     const io = ioInstance;
     if (!io) { return; }
 
+    const userId = data?.id;
+
+    // Always track active tokens so server-side user/session updates can fan out in real time
+    if (userId) {
+      const activeUsersKey = `${process.env.PROJECT_NAME}-activeUsers:${userId}`;
+      await redis.sadd(activeUsersKey, token);
+      await redis.expire(activeUsersKey, SESSION_TTL);
+    }
+
     // Handle single-session enforcement on new login
     if (newUser && config.allowMultipleSessions === false) {
-      const userId = data?.id;
       if (!userId) return;
 
       const activeUsersKey = `${process.env.PROJECT_NAME}-activeUsers:${userId}`;
@@ -63,10 +71,6 @@ const saveSession = async (token: string, data: SessionLayout, newUser?: boolean
           }
         }));
       }
-
-      // Track the new session
-      await redis.sadd(activeUsersKey, token);
-      await redis.expire(activeUsersKey, SESSION_TTL);
     }
 
     // Broadcast session updates to connected clients
