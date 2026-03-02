@@ -104,6 +104,49 @@ luckystack/
 
 ---
 
+## Keet Gallery App
+
+The workspace now contains a full gallery app with public browsing and public management routes (no auth):
+
+- `/` → redirects to `/dashboard`
+- `/dashboard` → album overview + two random carousels
+- `/dashboard/:album` → album detail page
+- `/upload` → album and media management page
+
+### Media Storage Layout
+
+- Original media: `uploads/{album}/*`
+- Generated low-quality and thumbnail derivatives: `uploads/_derived/{album}/...`
+- Folders that start with `_` are ignored by the dashboard.
+
+### Gallery API Endpoints (framework `_api` routes)
+
+- `POST /api/dashboard/getDashboard/v1` → dashboard data (albums + carousel items)
+- `POST /api/dashboard/getAlbum/v1` → single album detail (`{ folder, includeHidden }`)
+- `POST /api/upload/getAlbums/v1` → full admin album list
+- `POST /api/upload/createAlbum/v1` → create album (`{ albumName, theme }`)
+- `POST /api/upload/updateAlbum/v1` → update album metadata (`title`, `theme`, `hidden`, `coverFiles`, `extraFiles`)
+- `POST /api/upload/deleteAlbum/v1` → delete album and files
+- `POST /api/upload/reorderAlbum/v1` → persist image order
+- `POST /api/upload/deleteFiles/v1` → bulk delete files
+- `POST /api/upload/uploadFiles/v1` → batch upload + replace (supports JSON base64 payload and multipart `FormData`)
+
+### Album Metadata Rules
+
+- One album = one folder level (`uploads/{album}`), no nested subfolders.
+- Dashboard cards can render up to 4 custom cover images (`coverFiles`).
+- Media can be tagged as extra (`extraFiles`) for optional UI grouping/logic.
+- If no explicit cover is set, dashboard falls back to first available media.
+
+### Performance Defaults
+
+- Static image uploads are auto-optimized to webp.
+- Low-quality placeholders + thumbnail variants are generated automatically.
+- `/uploads/*` responses include strong cache headers.
+- Video responses support range requests.
+
+---
+
 ## Common Patterns
 
 ### Page with API and Sync

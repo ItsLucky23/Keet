@@ -16,10 +16,10 @@ import { deleteSession } from './functions/session';
 import allowedOrigin from './auth/checkOrigin';
 import { SessionLayout } from '../config';
 
-import { serveAvatar } from './utils/serveAvatars';
 import { extractTokenFromRequest } from './utils/extractTokenFromRequest';
 import { handleHttpApiRequest } from './sockets/handleHttpApiRequest';
 import handleHttpSyncRequest from './sockets/handleHttpSyncRequest';
+import { ensureMediaRoots, serveUploadAsset } from './media/mediaLibrary';
 
 const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
 
@@ -67,13 +67,28 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
     return serveFavicon(res);
   }
 
+  await ensureMediaRoots();
+
   //? here we get the params from the request
   let params: object | null;
   params = await getParams({ method, req, res, queryString });
 
   //? we log the request and if there are any params we log them with the request
   if (params && typeof params == 'object' && Object.keys(params).length !== 0) {
-    console.log(`method: ${method}, url: ${routePath}, params: ${JSON.stringify(params)}`, 'magenta')
+    const isUploadApi = routePath === '/api/upload/uploadFiles/v1';
+    if (isUploadApi && Array.isArray((params as any).files)) {
+      console.log(
+        `method: ${method}, url: ${routePath}, params: ${JSON.stringify({
+          folder: (params as any).folder,
+          replaceTarget: (params as any).replaceTarget,
+          markAsExtra: (params as any).markAsExtra,
+          filesCount: (params as any).files.length,
+        })}`,
+        'magenta'
+      );
+    } else {
+      console.log(`method: ${method}, url: ${routePath}, params: ${JSON.stringify(params)}`, 'magenta')
+    }
   } else {
     console.log(`method: ${method}, url: ${routePath}`, 'magenta');
     params = {};
@@ -81,7 +96,7 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
 
   //? we dont use zod cause it doesnt allow you to pass in a id in the url
   if (routePath.startsWith('/uploads/')) {
-    await serveAvatar({ routePath, res });
+    await serveUploadAsset({ routePath, res, range: req.headers.range });
     return;
   }
 

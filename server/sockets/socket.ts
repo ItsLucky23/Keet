@@ -74,7 +74,7 @@ export default function loadSocket(httpServer: any) {
       },
       credentials: true,
     },
-    maxHttpBufferSize: 5 * 1024 * 1024, // 5 MB
+    maxHttpBufferSize: 300 * 1024 * 1024, // 300 MB
   });
 
   ioInstance = io;

@@ -171,13 +171,14 @@ export function apiRequest(params: any): Promise<any> {
       if (signal && signal.aborted) { return; }
 
       const tempIndex = incrementResponseIndex();
+      
+      if (dev) { console.log(`Client API Request(${tempIndex}): `, { APINAME: name, data }) }
       socketInstance.emit('apiRequest', { name: fullname, data, responseIndex: tempIndex });
 
       type ApiResponse =
         | ({ status: "success"; httpStatus: number } & any)
         | { status: "error"; httpStatus: number; message: string; errorCode: string; errorParams?: { key: string; value: string | number | boolean; }[] };
 
-      if (dev) { console.log(`Client API Request(${tempIndex}): `, { APINAME: name, data }) }
       socketInstance.once(`apiResponse-${tempIndex}`, (response: ApiResponse) => {
         if (signal && signal.aborted) { return; }
 

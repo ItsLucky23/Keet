@@ -76,6 +76,20 @@ model user {
   updatedAt      DateTime  @updatedAt
 }
 
+model album {
+  id            String   @id @default(uuid()) @map("_id")
+  folder        String   @unique
+  title         String
+  hidden        Boolean  @default(false)
+  theme         String   @default("default")
+  thumbnailFile String?
+  coverFiles    String[] @default([])
+  extraFiles    String[] @default([])
+  imageOrder    String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 enum THEME {
   dark
   light

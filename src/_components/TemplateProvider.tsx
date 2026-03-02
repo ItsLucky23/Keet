@@ -156,17 +156,17 @@ export default function TemplateProvider({
     }
   }, [session, updateTheme, reactLocation]);
 
-  if (dev) {
-    return (
-      <div className='w-full h-full relative'>
-        <div className='absolute top-2 right-2 z-50 bg-red-500 text-white px-2 py-1 rounded-md text-xs font-bold'>
-          {translate({ key: 'template.socketStatus' })} {socketStatus.self.status}
-          {socketStatus.self.status === "RECONNECTING" && socketStatus.self.reconnectAttempt !== undefined ? ` (attempt ${String(socketStatus.self.reconnectAttempt)})` : ''}
-        </div>
-        <TemplateComponent>{children}</TemplateComponent>
-      </div>
-    );
-  }
+  // if (dev) {
+  //   return (
+  //     <div className='w-full h-full relative'>
+  //       <div className='absolute top-2 right-2 z-50 bg-red-500 text-white px-2 py-1 rounded-md text-xs font-bold'>
+  //         {translate({ key: 'template.socketStatus' })} {socketStatus.self.status}
+  //         {socketStatus.self.status === "RECONNECTING" && socketStatus.self.reconnectAttempt !== undefined ? ` (attempt ${String(socketStatus.self.reconnectAttempt)})` : ''}
+  //       </div>
+  //       <TemplateComponent>{children}</TemplateComponent>
+  //     </div>
+  //   );
+  // }
 
   return (
     <TemplateComponent>{children}</TemplateComponent>

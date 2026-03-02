@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from "http";
 import tryCatch from "../../shared/tryCatch";
+import { parseMultipartRequest } from "../media/mediaLibrary";
 
 type getParamsType = {
   method: string;
@@ -17,7 +18,32 @@ export default async function getParams({ method, req, res: _res, queryString }:
 
   //? if a POST, PUT or DELETE method we return the body as an object
   return new Promise((resolve, reject) => {
-    const contentType = req.headers['content-type'] || '';
+    const rawContentType = req.headers['content-type'];
+    const contentType = (Array.isArray(rawContentType) ? rawContentType[0] : rawContentType || '').toLowerCase();
+
+    if (contentType.includes('multipart/form-data')) {
+      void (async () => {
+        const [multipartError, multipartData] = await tryCatch(parseMultipartRequest, req);
+        if (multipartError || !multipartData) {
+          reject(multipartError ?? new Error('Invalid multipart request'));
+          return;
+        }
+
+        const parsed = {
+          folder: multipartData.fields.folder ?? '',
+          replaceTarget: multipartData.fields.replaceTarget || undefined,
+          markAsExtra: multipartData.fields.markAsExtra === 'true',
+          files: multipartData.files.map((file) => ({
+            fileName: file.fileName,
+            mimeType: file.mimeType,
+            base64: file.buffer.toString('base64'),
+          })),
+        };
+
+        resolve(parsed);
+      })();
+      return;
+    }
 
     //? we store the passed data chunks in a string
     let body = '';
@@ -36,6 +62,7 @@ export default async function getParams({ method, req, res: _res, queryString }:
         const [error, response] = await tryCatch(parseData)
         if (response) { resolve(response) }
         else { reject(error) }
+        return;
       }
 
       //? if the content type is application/json we parse the data as a JSON object
@@ -46,6 +73,7 @@ export default async function getParams({ method, req, res: _res, queryString }:
         const [error, response] = await tryCatch(parseData)
         if (response) { resolve(response) }
         else { reject(error) }
+        return;
       }
 
       resolve({ body });
