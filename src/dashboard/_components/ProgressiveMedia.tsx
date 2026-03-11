@@ -7,13 +7,19 @@ interface Props {
   alt: string;
   className?: string;
   onClick?: () => void;
+  fit?: 'cover' | 'contain' | 'natural';
 }
 
-export default function ProgressiveMedia({ media, alt, className, onClick }: Props) {
+export default function ProgressiveMedia({ media, alt, className, onClick, fit = 'cover' }: Props) {
   const [loaded, setLoaded] = useState(false);
 
   const placeholder = useMemo(() => media.lowQualityUrl ?? media.thumbUrl ?? media.originalUrl, [media.lowQualityUrl, media.originalUrl, media.thumbUrl]);
   const interactiveClass = onClick ? 'cursor-pointer' : '';
+  const fitClass = fit === 'natural'
+    ? 'h-full w-auto object-contain'
+    : fit === 'contain'
+      ? 'h-full w-full object-contain'
+      : 'h-full w-full object-cover';
 
   if (media.kind === 'video') {
     return (
@@ -21,33 +27,44 @@ export default function ProgressiveMedia({ media, alt, className, onClick }: Pro
         src={media.originalUrl}
         preload={`metadata`}
         controls
-        className={`${className ?? ''} ${interactiveClass}`}
+        className={`${className ?? ''} ${interactiveClass} ${fitClass}`}
         onClick={onClick}
+        onDragStart={(event) => event.preventDefault()}
+        draggable={false}
       />
     );
   }
 
   return (
-    <div className={`relative overflow-hidden ${className ?? ''} ${interactiveClass}`} onClick={onClick} onKeyDown={(event) => {
+    <div
+      className={`relative overflow-hidden select-none ${className ?? ''} ${interactiveClass}`}
+      onClick={onClick}
+      onDragStart={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
       if (!onClick) return;
       if (event.key === 'Enter' || event.key === ' ') {
         onClick();
       }
-    }} role={onClick ? `button` : undefined} tabIndex={onClick ? 0 : undefined}>
+    }}
+      role={onClick ? `button` : undefined}
+      tabIndex={onClick ? 0 : undefined}
+    >
       {!loaded && (
         <img
           src={placeholder}
           alt={alt}
           loading={`lazy`}
-          className={`absolute inset-0 h-full w-full object-cover blur-sm scale-105`}
+          className={`absolute inset-0 ${fitClass} blur-sm scale-105`}
+          draggable={false}
         />
       )}
       <img
         src={media.originalUrl}
         alt={alt}
         loading={`lazy`}
-        className={`h-full w-full object-cover transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        className={`${fitClass} transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
         onLoad={() => setLoaded(true)}
+        draggable={false}
       />
     </div>
   );

@@ -338,27 +338,51 @@ export default function UploadPage() {
   };
 
   const toggleCoverFile = (fileName: string) => {
-    setCoverFiles((current) => {
-      if (current.includes(fileName)) {
-        return current.filter((item) => item !== fileName);
-      }
+    if (!selectedAlbum) return;
 
-      if (current.length >= 4) {
+    let nextCoverFiles = coverFiles;
+
+    if (coverFiles.includes(fileName)) {
+      nextCoverFiles = coverFiles.filter((item) => item !== fileName);
+    } else {
+      if (coverFiles.length >= 4) {
         notify.error({ key: 'gallery.coverLimitReached' });
-        return current;
+        return;
       }
 
-      return [...current, fileName];
+      nextCoverFiles = [...coverFiles, fileName];
+    }
+
+    setCoverFiles(nextCoverFiles);
+
+    void updateAlbumRequest({
+      folder: selectedAlbum.folder,
+      coverFiles: nextCoverFiles,
+      extraFiles,
+    }).then((result) => {
+      if (!('status' in result && result.status === 'success')) {
+        notify.error({ key: 'gallery.saveFailed' });
+      }
     });
   };
 
   const toggleExtraFile = (fileName: string) => {
-    setExtraFiles((current) => {
-      if (current.includes(fileName)) {
-        return current.filter((item) => item !== fileName);
-      }
+    if (!selectedAlbum) return;
 
-      return [...current, fileName];
+    const nextExtraFiles = extraFiles.includes(fileName)
+      ? extraFiles.filter((item) => item !== fileName)
+      : [...extraFiles, fileName];
+
+    setExtraFiles(nextExtraFiles);
+
+    void updateAlbumRequest({
+      folder: selectedAlbum.folder,
+      coverFiles,
+      extraFiles: nextExtraFiles,
+    }).then((result) => {
+      if (!('status' in result && result.status === 'success')) {
+        notify.error({ key: 'gallery.saveFailed' });
+      }
     });
   };
 
@@ -413,35 +437,60 @@ export default function UploadPage() {
   const handleToggleSelectedExtra = () => {
     if (selectedFiles.length === 0) return;
 
-    if (allSelectedMarkedExtra) {
-      setExtraFiles((current) => current.filter((fileName) => !selectedFiles.includes(fileName)));
-      return;
-    }
+    if (!selectedAlbum) return;
 
-    setExtraFiles((current) => Array.from(new Set([...current, ...selectedFiles])));
+    const nextExtraFiles = allSelectedMarkedExtra
+      ? extraFiles.filter((fileName) => !selectedFiles.includes(fileName))
+      : Array.from(new Set([...extraFiles, ...selectedFiles]));
+
+    setExtraFiles(nextExtraFiles);
+
+    void updateAlbumRequest({
+      folder: selectedAlbum.folder,
+      coverFiles,
+      extraFiles: nextExtraFiles,
+    }).then((result) => {
+      if (!('status' in result && result.status === 'success')) {
+        notify.error({ key: 'gallery.saveFailed' });
+      }
+    });
   };
 
   const handleToggleSelectedCover = () => {
     if (selectedNonVideoMedia.length === 0) return;
 
+    if (!selectedAlbum) return;
+
+    let nextCoverFiles = coverFiles;
+
     if (allSelectedNonVideoMarkedCover) {
       const selectedNames = selectedNonVideoMedia.map((item) => item.fileName);
-      setCoverFiles((current) => current.filter((fileName) => !selectedNames.includes(fileName)));
-      return;
+      nextCoverFiles = coverFiles.filter((fileName) => !selectedNames.includes(fileName));
+    } else {
+      if (!canAddCoverToSelection) {
+        notify.error({ key: 'gallery.coverLimitReached' });
+        return;
+      }
+
+      const toAdd = selectedNonVideoNotCovered.slice(0, remainingCoverSlots).map((item) => item.fileName);
+      nextCoverFiles = Array.from(new Set([...coverFiles, ...toAdd]));
+
+      if (selectedNonVideoNotCovered.length > remainingCoverSlots) {
+        notify.error({ key: 'gallery.coverLimitReached' });
+      }
     }
 
-    if (!canAddCoverToSelection) {
-      notify.error({ key: 'gallery.coverLimitReached' });
-      return;
-    }
+    setCoverFiles(nextCoverFiles);
 
-    const toAdd = selectedNonVideoNotCovered.slice(0, remainingCoverSlots).map((item) => item.fileName);
-
-    setCoverFiles((current) => Array.from(new Set([...current, ...toAdd])));
-
-    if (selectedNonVideoNotCovered.length > remainingCoverSlots) {
-      notify.error({ key: 'gallery.coverLimitReached' });
-    }
+    void updateAlbumRequest({
+      folder: selectedAlbum.folder,
+      coverFiles: nextCoverFiles,
+      extraFiles,
+    }).then((result) => {
+      if (!('status' in result && result.status === 'success')) {
+        notify.error({ key: 'gallery.saveFailed' });
+      }
+    });
   };
 
   const moveMedia = (dragged: string, target: string) => {

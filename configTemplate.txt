@@ -1,4 +1,4 @@
-import { user } from '@prisma/client';
+import { THEME, user } from '@prisma/client';
 
 // ============================================
 // LUCKYSTACK CONFIGURATION
@@ -87,7 +87,7 @@ const config = {
   defaultLanguage: 'en',
  
   /** Default theme when user hasn't set a preference */
-  defaultTheme: 'dark' as 'light' | 'dark',
+  defaultTheme: 'dark' as THEME,
 
   // ============================================
   // RATE LIMITING

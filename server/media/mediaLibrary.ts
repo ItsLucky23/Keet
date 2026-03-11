@@ -35,6 +35,7 @@ export interface AlbumView {
   theme: string;
   thumbnailFile: string | null;
   coverFiles: string[];
+  extraFiles: string[];
   imageCount: number;
   createdAt: number;
   updatedAt: number;
@@ -349,6 +350,7 @@ export const listAlbumsWithMedia = async ({ includeHidden }: { includeHidden: bo
       theme: albumDoc.theme,
       thumbnailFile,
       coverFiles: albumDoc.coverFiles.filter((item) => media.some((mediaItem) => mediaItem.fileName === item)).slice(0, 4),
+      extraFiles: albumDoc.extraFiles.filter((item) => media.some((mediaItem) => mediaItem.fileName === item)),
       imageCount: media.length,
       createdAt: albumDoc.createdAt.getTime(),
       updatedAt: albumDoc.updatedAt.getTime(),
