@@ -1,3 +1,4 @@
+<<<<<<< HEAD:config.ts
 import { LANGUAGE, THEME, User } from "@prisma/client";
 
 type AppEnvironmentConfig = {
@@ -38,6 +39,9 @@ const detectedDns = normalizeDns(
 
 const resolvedEnvironment =
   dnsEnvironmentMap[detectedDns] ?? dnsEnvironmentMap["http://localhost:5173"];
+=======
+import { THEME, user } from '@prisma/client';
+>>>>>>> e43a9d2330b92b8219ffe752e11a061d712e4c6e:configTemplate.txt
 
 const config = {
   /** The URL of the backend server. Update for production. */
@@ -105,7 +109,15 @@ const config = {
   defaultLanguage: 'en' as LANGUAGE,
  
   /** Default theme when user hasn't set a preference */
+<<<<<<< HEAD:config.ts
   defaultTheme: 'light' as THEME,
+=======
+  defaultTheme: 'dark' as THEME,
+
+  // ============================================
+  // RATE LIMITING
+  // ============================================
+>>>>>>> e43a9d2330b92b8219ffe752e11a061d712e4c6e:configTemplate.txt
 
   /**
    * Rate limiting configuration for API requests.
