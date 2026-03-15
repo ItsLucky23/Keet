@@ -2,6 +2,8 @@ import { IncomingMessage, ServerResponse } from "http";
 import tryCatch from "../../shared/tryCatch";
 import { parseMultipartRequest } from "../media/mediaLibrary";
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+
 type getParamsType = {
   method: string;
   req: IncomingMessage;
@@ -47,7 +49,22 @@ export default async function getParams({ method, req, res: _res, queryString }:
 
     //? we store the passed data chunks in a string
     let body = '';
+    let bodySize = 0;
     req.on('data', (chunk) => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY_BYTES) {
+        _res.setHeader('Content-Type', 'application/json');
+        _res.writeHead(413);
+        _res.end(JSON.stringify({
+          status: 'error',
+          httpStatus: 413,
+          message: 'api.payloadTooLarge',
+          errorCode: 'api.payloadTooLarge',
+        }));
+        req.destroy();
+        return resolve(null);
+      }
+
       body += chunk.toString();
     });
 
@@ -59,10 +76,20 @@ export default async function getParams({ method, req, res: _res, queryString }:
           const data = new URLSearchParams(body);
           return Object.fromEntries(data);
         }
-        const [error, response] = await tryCatch(parseData)
-        if (response) { resolve(response) }
-        else { reject(error) }
-        return;
+        const [, response] = await tryCatch(parseData)
+        if (response) {
+          return resolve(response)
+        }
+
+        _res.setHeader('Content-Type', 'application/json');
+        _res.writeHead(400);
+        _res.end(JSON.stringify({
+          status: 'error',
+          httpStatus: 400,
+          message: 'api.invalidRequestFormat',
+          errorCode: 'api.invalidRequestFormat',
+        }));
+        return resolve(null);
       }
 
       //? if the content type is application/json we parse the data as a JSON object
@@ -70,10 +97,20 @@ export default async function getParams({ method, req, res: _res, queryString }:
         const parseData = () => {
           return JSON.parse(body || '{}');
         }
-        const [error, response] = await tryCatch(parseData)
-        if (response) { resolve(response) }
-        else { reject(error) }
-        return;
+        const [, response] = await tryCatch(parseData)
+        if (response) {
+          return resolve(response)
+        }
+
+        _res.setHeader('Content-Type', 'application/json');
+        _res.writeHead(400);
+        _res.end(JSON.stringify({
+          status: 'error',
+          httpStatus: 400,
+          message: 'api.invalidRequestFormat',
+          errorCode: 'api.invalidRequestFormat',
+        }));
+        return resolve(null);
       }
 
       resolve({ body });

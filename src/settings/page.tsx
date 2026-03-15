@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import Avatar from "src/_components/Avatar";
 import ThemeToggler from "src/_components/ThemeToggler";
@@ -9,11 +9,6 @@ import { useSession } from "src/_providers/SessionProvider";
 import { apiRequest } from "src/_sockets/apiRequest";
 
 import { backendUrl } from "../../config";
-
-const incrementAvatarVersion = (url: string) => {
-  const match = /[?&]v=(\d+)/.exec(url);
-  return match ? Number.parseInt(match[1]) + 1 : 1;
-}
 
 //? Strip ?v= cache buster so avatar comparisons aren't affected by version changes
 const stripAvatarVersion = (url: string) => url.replace(/[?&]v=\d+/, '');
@@ -27,18 +22,22 @@ export default function Home() {
   const translate = useTranslator();
 
   const [newLanguage, setNewLanguage] = useState<'nl' | 'en' | 'de' | 'fr'>((session?.language ?? '') as 'nl' | 'en' | 'de' | 'fr');
-  const [newAvatar, setNewAvatar] = useState<string>(session?.avatar ?? '');
   const [newName, setNewName] = useState<string>(session?.name ?? '');
   const [newTheme, setNewTheme] = useState<'light' | 'dark'>(session?.theme ?? 'dark');
 
-  const saveUser = useCallback(async (isAvatarChange?: boolean) => {
+  const saveUser = useCallback(async (newAvatar?: string) => {
     if (!session) return;
+
+    const avatarChanged = newAvatar
+      ? stripAvatarVersion(newAvatar) !== stripAvatarVersion(session.avatar)
+      : false;
+    const avatarToSave = avatarChanged ? newAvatar : undefined;
 
     if (
       newLanguage === session.language
       && newName === session.name
       && newTheme === session.theme
-      && !isAvatarChange
+      && !newAvatar
     ) {
       notify.info({ key: 'settings.noChangesMade' })
       return;
@@ -49,7 +48,7 @@ export default function Home() {
       version: 'v1',
       data: {
         language: newLanguage === session.language ? undefined : newLanguage,
-        avatar: stripAvatarVersion(newAvatar) === stripAvatarVersion(session.avatar) ? undefined : newAvatar,
+        avatar: avatarToSave,
         name: newName === session.name ? undefined : newName,
         theme: newTheme === session.theme ? undefined : newTheme,
       },
@@ -59,12 +58,7 @@ export default function Home() {
     } else {
       notify.error({ key: 'settings.failedUpdateUser' })
     }
-  }, [newLanguage, newAvatar, newName, newTheme, session]);
-
-  useEffect(() => {
-    if (!session) return;
-    void saveUser(true);
-  }, [newAvatar, saveUser, session])
+  }, [newLanguage, newName, newTheme, session]);
 
   const displayUrl = session
     ? (session.avatar.startsWith('http') ? session.avatar : `${backendUrl}/uploads/${session.avatar}`)
@@ -110,9 +104,10 @@ export default function Home() {
                   reader.addEventListener('load', () => {
                     const result = reader.result;
                     if (typeof result === 'string') {
-                      setNewAvatar(prevUrl => `${result}?v=${String(incrementAvatarVersion(prevUrl || ""))}`)
+                      // setNewAvatar(prevUrl => `${result}?v=${String(incrementAvatarVersion(prevUrl || ""))}`)
+                      // setNewAvatar(result);
+                      void saveUser(`${result}?v=${String(Date.now())}`); // Add a cache buster to ensure the new avatar is loaded
                     }
-                    notify.success({ key: 'settings.imgLoaded' })
                   });
                   reader.readAsDataURL(file);
                   })

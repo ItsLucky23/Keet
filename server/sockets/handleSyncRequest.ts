@@ -1,16 +1,29 @@
-import { devSyncs, devFunctions } from "../dev/loader"
 import { syncs, functions } from '../prod/generatedApis'
 import { ioInstance, syncMessage } from "./socket";
 import { Socket } from "socket.io";
 import { getSession } from "../functions/session";
-import { SessionLayout } from "../../config";
+import config, { SessionLayout } from "../../config";
 import { validateRequest } from "../utils/validateRequest";
 import { extractTokenFromSocket } from "../utils/extractToken";
 import tryCatch from "../../shared/tryCatch";
 import { extractLanguageFromHeader, normalizeErrorResponse } from "../utils/responseNormalizer";
 import { validateInputByType } from "../utils/runtimeTypeValidation";
+import { checkRateLimit } from "../utils/rateLimiter";
 
-const functionsObject = process.env.NODE_ENV == 'development' ? devFunctions : functions;
+const getRuntimeSyncMaps = async () => {
+  if (process.env.NODE_ENV !== 'production') {
+    const { devSyncs, devFunctions } = await import('../dev/loader');
+    return {
+      syncObject: devSyncs,
+      functionsObject: devFunctions,
+    };
+  }
+
+  return {
+    syncObject: syncs,
+    functionsObject: functions,
+  };
+};
 
 
 // export default async function handleSyncRequest({ name, clientData, user, serverOutput, roomCode }: syncMessage) {
@@ -107,7 +120,7 @@ export default async function handleSyncRequest({ msg, socket, token }: {
   console.log(`sync: ${name} called`, 'blue');
 
   const user = await getSession(token);
-  const syncObject = process.env.NODE_ENV == 'development' ? devSyncs : syncs;
+  const { syncObject, functionsObject } = await getRuntimeSyncMaps();
   const nameSegments = name.split('/').filter(Boolean);
   const syncBaseName = nameSegments[nameSegments.length - 2];
   const requestedVersion = nameSegments[nameSegments.length - 1];
@@ -132,11 +145,58 @@ export default async function handleSyncRequest({ msg, socket, token }: {
     }));
   }
 
+  //? Rate limit check: per-sync bucket fallback + global per-IP cap
+  if (config.rateLimiting.defaultApiLimit !== false && config.rateLimiting.defaultApiLimit > 0) {
+    const requesterIdentity = token ?? socket.handshake.address ?? 'unknown';
+    const keyPrefix = token ? 'token' : 'ip';
+
+    const { allowed, resetIn } = checkRateLimit({
+      key: `${keyPrefix}:${requesterIdentity}:sync:${resolvedName}`,
+      limit: config.rateLimiting.defaultApiLimit,
+      windowMs: config.rateLimiting.windowMs,
+    });
+
+    if (!allowed) {
+      return typeof responseIndex == 'number' && socket.emit(`sync-${responseIndex}`, buildSyncError({
+        response: {
+          status: 'error',
+          errorCode: 'sync.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+          httpStatus: 429,
+        },
+        preferred: preferredLocale,
+        userLanguage: user?.language,
+      }));
+    }
+  }
+
+  if (config.rateLimiting.defaultIpLimit !== false && config.rateLimiting.defaultIpLimit > 0) {
+    const requesterIp = socket.handshake.address ?? 'unknown';
+    const { allowed, resetIn } = checkRateLimit({
+      key: `ip:${requesterIp}:sync:all`,
+      limit: config.rateLimiting.defaultIpLimit,
+      windowMs: config.rateLimiting.windowMs,
+    });
+
+    if (!allowed) {
+      return typeof responseIndex == 'number' && socket.emit(`sync-${responseIndex}`, buildSyncError({
+        response: {
+          status: 'error',
+          errorCode: 'sync.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+          httpStatus: 429,
+        },
+        preferred: preferredLocale,
+        userLanguage: user?.language,
+      }));
+    }
+  }
+
   let serverOutput = {};
   if (syncObject[`${resolvedName}_server`]) {
     const { auth, main: serverMain, inputType, inputTypeFilePath } = syncObject[`${resolvedName}_server`];
 
-    const inputValidation = validateInputByType({
+    const inputValidation = await validateInputByType({
       typeText: inputType,
       value: data,
       rootKey: 'clientInput',
@@ -245,9 +305,6 @@ export default async function handleSyncRequest({ msg, socket, token }: {
     //? check if they have a token stored in their cookie or session based on the settings
     const tempToken = extractTokenFromSocket(tempSocket);
 
-    //? here we get the users session of the client and run the sync function with the data and the users session data
-    const user = await getSession(tempToken);
-
     if (ignoreSelf && typeof ignoreSelf == 'boolean') {
       if (token == tempToken) {
         continue;
@@ -255,7 +312,7 @@ export default async function handleSyncRequest({ msg, socket, token }: {
     }
 
     if (syncObject[`${resolvedName}_client`]) {
-      const [clientSyncError, clientSyncResult] = await tryCatch(async () => await syncObject[`${resolvedName}_client`]({ clientInput: data, user, functions: functionsObject, serverOutput, roomCode: receiver }));
+      const [clientSyncError, clientSyncResult] = await tryCatch(async () => await syncObject[`${resolvedName}_client`]({ clientInput: data, token: tempToken, functions: functionsObject, serverOutput, roomCode: receiver }));
       if (clientSyncError) {
         tempSocket.emit(`sync`, {
           cb,
@@ -265,7 +322,6 @@ export default async function handleSyncRequest({ msg, socket, token }: {
             preferred:
               extractLanguageFromHeader(tempSocket.handshake.headers['x-language'])
               || extractLanguageFromHeader(tempSocket.handshake.headers['accept-language']),
-            userLanguage: user?.language,
           }),
         });
         continue;
@@ -279,7 +335,6 @@ export default async function handleSyncRequest({ msg, socket, token }: {
             preferred:
               extractLanguageFromHeader(tempSocket.handshake.headers['x-language'])
               || extractLanguageFromHeader(tempSocket.handshake.headers['accept-language']),
-            userLanguage: user?.language,
           }),
         });
         continue;
@@ -293,7 +348,6 @@ export default async function handleSyncRequest({ msg, socket, token }: {
             preferred:
               extractLanguageFromHeader(tempSocket.handshake.headers['x-language'])
               || extractLanguageFromHeader(tempSocket.handshake.headers['accept-language']),
-            userLanguage: user?.language,
           }),
         });
         continue;

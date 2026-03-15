@@ -105,7 +105,6 @@ export const main = async ({
 ### 2. Client handler (optional)
 
 ```typescript
-import { SessionLayout } from "../../../config";
 import {
   Functions,
   SyncClientResponse,
@@ -121,22 +120,23 @@ export interface SyncParams {
 
   serverOutput: SyncServerOutput<PagePath, SyncName>;
   // Note: No serverOutput in client-only syncs (no _server.ts file)
-  user: SessionLayout; // session data from any user that is in the room
+  token: string | null; // target client token (fetch session only when needed)
   functions: Functions; // contains functions available from server/functions
   roomCode: string; // room code
 }
 
 export const main = async ({
-  user,
+  token,
   clientInput,
   serverOutput,
   functions,
   roomCode,
 }: SyncParams): Promise<SyncClientResponse> => {
   // CLIENT FILTER/RULE STAGE: runs on server for each target client in the room
+  const targetUser = token ? await functions.session.getSession(token) : null;
 
   // Example: Only allow users on set page to receive the event
-  // if (user?.location?.pathName === '/your-page') {
+  // if (targetUser?.location?.pathName === '/your-page') {
   //   return { status: 'success' };
   // }
 
@@ -146,6 +146,8 @@ export const main = async ({
   };
 };
 ```
+
+Client sync handlers no longer receive `user` automatically. This avoids a Redis session lookup for every target socket. When you need target session data, call `functions.session.getSession(token)` inside `_client.ts`.
 
 ## Receiving Sync Events
 
@@ -210,6 +212,18 @@ Body:
 
 Note: HTTP is only the trigger. Actual delivery still happens via Socket.io to users in the target room.
 
+HTTP sync requests are rate-limited using global `config.rateLimiting` settings:
+
+```typescript
+rateLimiting: {
+  defaultApiLimit: 60, // fallback per-sync-route limit
+  defaultIpLimit: 100, // global per-IP cap across all sync routes
+  windowMs: 60000,
+}
+```
+
+When exceeded, handlers return `sync.rateLimitExceeded` with `seconds` in `errorParams`.
+
 ---
 
 ---
@@ -222,11 +236,63 @@ Note: HTTP is only the trigger. Actual delivery still happens via Socket.io to u
 | `serverOutput` | `_server.ts` return            | Server processing result |
 | `clientOutput` | `_client.ts` clientMain return | Client processing result |
 
+Generated sync output typing preserves direct literal return values in object properties (for example `allowed: true` vs `allowed: false`) so TypeScript can narrow branch-specific shapes safely.
+
 ### Error Contract
 
 - Sync errors should return `status: 'error'` with an `errorCode` (and optional `errorParams` / `httpStatus`).
 - Server resolves the final `message` through i18n using `errorCode` + `errorParams`.
 - Avoid hardcoded human-readable error messages in server sync handlers.
+
+---
+
+## Type Generation Pipeline (Timing-Aware)
+
+In development, sync typing updates follow this sequence:
+
+1. File save
+2. Template injection (if applicable, only for new empty files in `_sync/`)
+3. Hot reload trigger
+4. Type-map regeneration
+5. Typed helpers become accurate (`syncRequest`, callback payload inference for `serverOutput`/`clientOutput`)
+
+Regeneration is asynchronous. After a save, there can be a short lag (typically hundreds of milliseconds) before generated helper types fully reflect the latest sync file state.
+
+## Timing-Aware AI Workflow
+
+Use a trust-first workflow for sync edits:
+
+1. First pass: implement using the intended typed sync contract and trust server/client payload shapes.
+2. Wait/re-check pass: after generation settles, re-open generated types and remove temporary casts/narrowing if no longer needed.
+
+This avoids premature unsafe rewrites while the generator is still catching up.
+
+Temporary exception note:
+
+- If a short generator-lag window forces a cast, keep it local and minimal, then remove it once types refresh.
+
+Good vs bad examples:
+
+```typescript
+// Bad: local wrapper erases sync route typing and callback payload inference
+const onSyncLoose = (name: string, cb: (payload: any) => void) =>
+  upsertSyncEventCallback({ name: name as any, version: "v1" as any, callback: cb as any });
+
+// Good: direct typed callback payload usage
+upsertSyncEventCallback({
+  name: "examples/updateCounter",
+  version: "v1",
+  callback: ({ serverOutput, clientOutput }) => {
+    console.log(serverOutput, clientOutput);
+  },
+});
+```
+
+AI self-check before finalizing changes:
+
+- Did I rely on generated route/version types?
+- Did I avoid adding new unsafe wrappers?
+- If I used a temporary cast during generation lag, did I re-check and remove it after types refreshed?
 
 ---
 

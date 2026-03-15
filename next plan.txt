@@ -1,0 +1,16 @@
+Future Work (Not in This Plan)
+
+split the framework up into different npm packages, this requires us to analyze the complete codebase and replace any hardcoded value with configurable values and make more things optional / split them from existing code so that the user never has to change anything in the npm packages and can change them in other files we tell the user to add into there primary folder.
+add a logging tool
+add a metrics tool
+add a tracing tool
+NPM package modularization - Split into @luckystack/*
+  @luckystack/core          # Socket client, base types, config loader
+  @luckystack/api           # apiRequest, API handler system
+  @luckystack/sync          # syncRequest, sync handler system, rooms
+  @luckystack/session       # Redis sessions, OAuth providers, auth middleware
+  @luckystack/react         # SessionProvider, SocketStatusProvider, hooks
+  @luckystack/cli           # Dev server, type generation, hot reload
+Session storage abstraction - Support PostgreSQL/JWT
+Location Provider - Optional feature just like socket broadcaster
+Middleware handler client sided redirect for non existing routes (currently we get the page not found error before so we cant map a url like test1232 to test)

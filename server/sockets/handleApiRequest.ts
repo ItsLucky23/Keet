@@ -1,5 +1,4 @@
 import { apis, functions } from '../prod/generatedApis'
-import { devApis, devFunctions } from "../dev/loader"
 import { apiMessage } from './socket';
 import { getSession } from '../functions/session';
 import config, { SessionLayout } from '../../config';
@@ -17,6 +16,21 @@ type handleApiRequestType = {
   socket: Socket,
   token: string | null,
 }
+
+const getRuntimeApiMaps = async () => {
+  if (process.env.NODE_ENV !== 'production') {
+    const { devApis, devFunctions } = await import('../dev/loader');
+    return {
+      apisObject: devApis,
+      functionsObject: devFunctions,
+    };
+  }
+
+  return {
+    apisObject: apis,
+    functionsObject: functions,
+  };
+};
 
 export default async function handleApiRequest({ msg, socket, token }: handleApiRequestType) {
   //? This event gets triggered when the client uses the apiRequest function
@@ -81,8 +95,7 @@ export default async function handleApiRequest({ msg, socket, token }: handleApi
 
   console.log(`api: ${name} called`, 'blue');
 
-  const isDevMode = process.env.NODE_ENV !== 'production';
-  const apisObject = isDevMode ? devApis : apis;
+  const { apisObject, functionsObject } = await getRuntimeApiMaps();
 
   //? Resolve API: try exact match first, then fall back to root-level
   //? e.g. client sends "api/examples/session" → not found → try "api/session"
@@ -110,7 +123,7 @@ export default async function handleApiRequest({ msg, socket, token }: handleApi
   const inputType = apisObject[resolvedName].inputType as string | undefined;
   const inputTypeFilePath = apisObject[resolvedName].inputTypeFilePath as string | undefined;
 
-  const inputValidation = validateInputByType({
+  const inputValidation = await validateInputByType({
     typeText: inputType,
     value: data,
     rootKey: 'data',
@@ -153,20 +166,20 @@ export default async function handleApiRequest({ msg, socket, token }: handleApi
     });
   }
 
-  //? Rate limiting check
+  //? Rate limiting check: per-API bucket (custom rateLimit or defaultApiLimit fallback)
   const apiRateLimit = apisObject[resolvedName].rateLimit;
-  const effectiveLimit = apiRateLimit !== undefined
+  const effectiveApiLimit = apiRateLimit !== undefined
     ? apiRateLimit
     : config.rateLimiting.defaultApiLimit;
 
-  if (effectiveLimit !== false && effectiveLimit > 0) {
-    const rateLimitKey = user?.id
-      ? `user:${user.id}:api:${name}`
-      : `ip:${socket.handshake.address}:api:${name}`;
+  if (effectiveApiLimit !== false && effectiveApiLimit > 0) {
+    const requesterIdentity = token ?? socket.handshake.address ?? 'unknown';
+    const keyPrefix = token ? 'token' : 'ip';
+    const rateLimitKey = `${keyPrefix}:${requesterIdentity}:api:${name}`;
 
     const { allowed, resetIn } = checkRateLimit({
       key: rateLimitKey,
-      limit: effectiveLimit,
+      limit: effectiveApiLimit,
       windowMs: config.rateLimiting.windowMs
     });
 
@@ -183,8 +196,30 @@ export default async function handleApiRequest({ msg, socket, token }: handleApi
     }
   }
 
+  //? Global per-IP bucket across all APIs
+  if (config.rateLimiting.defaultIpLimit !== false && config.rateLimiting.defaultIpLimit > 0) {
+    const requesterIp = socket.handshake.address ?? 'unknown';
+
+    const { allowed, resetIn } = checkRateLimit({
+      key: `ip:${requesterIp}:api:all`,
+      limit: config.rateLimiting.defaultIpLimit,
+      windowMs: config.rateLimiting.windowMs
+    });
+
+    if (!allowed) {
+      console.log(`Global IP rate limit exceeded for ${requesterIp}`, 'yellow');
+      return emitApiError({
+        response: {
+          status: 'error',
+          errorCode: 'api.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+        },
+        fallbackHttpStatus: 429,
+      });
+    }
+  }
+
   //? Execute the API handler
-  const functionsObject = isDevMode ? devFunctions : functions;
   const [error, result] = await tryCatch(
     async () => await main({ data, user, functions: functionsObject })
   );

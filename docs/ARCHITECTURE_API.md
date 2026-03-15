@@ -169,6 +169,7 @@ For translated error responses over HTTP, send one of:
   - success: `{ status: 'success', ...payload }`
   - error: `{ status: 'error', errorCode: string, errorParams?: [...], httpStatus?: number }`
 - HTTP responses normalize errors to include localized `message` and final `httpStatus`.
+- Generated output typing preserves direct literal return values in object properties (for example `submitted: true` and `submitted: false`) so branch-specific unions stay discriminated in TypeScript.
 
 ---
 
@@ -195,9 +196,9 @@ Configure globally in `config.ts`:
 
 ```typescript
 rateLimiting: {
-  defaultApiLimit: 60,   // Requests per minute per user
-  defaultIpLimit: 100,   // Per-IP limit (unauthenticated)
-  windowMs: 60000,       // 1 minute window
+  defaultApiLimit: 60,   // Fallback requests/min per API when no per-API rateLimit is exported
+  defaultIpLimit: 100,   // Global requests/min cap per IP across all APIs combined
+  windowMs: 60000,       // Request window size in milliseconds
 }
 ```
 
@@ -208,6 +209,54 @@ Or per-API:
 export const rateLimit = 30; // Override global
 export const rateLimit = false; // Disable for this API
 ```
+
+---
+
+## Type Generation Pipeline (Timing-Aware)
+
+In development, API typing updates follow this sequence:
+
+1. File save
+2. Template injection (if applicable, only for new empty files in `_api/`)
+3. Hot reload trigger
+4. Type-map regeneration
+5. Typed helpers become accurate (`apiRequest`, route-name unions, input/output inference)
+
+Regeneration is asynchronous. After a save, there can be a short lag (typically hundreds of milliseconds) before generated helper types fully reflect the latest file changes.
+
+## Timing-Aware AI Workflow
+
+Use a trust-first workflow for API edits:
+
+1. First pass: implement using the intended typed API contract and trust the server payload shape.
+2. Wait/re-check pass: after generation settles, re-open generated types and remove temporary casts/narrowing if no longer needed.
+
+This avoids premature unsafe rewrites while the generator is still catching up.
+
+Temporary exception note:
+
+- If a short generator-lag window forces a cast, keep it local and minimal, then remove it once types refresh.
+
+Good vs bad examples:
+
+```typescript
+// Bad: local unknown/any wrapper around typed helper
+const apiLoose = (name: string, version: string, data: unknown) =>
+  apiRequest({ name: name as any, version: version as any, data: data as any });
+
+// Good: direct typed call with route/version literals
+const result = await apiRequest({
+  name: "examples/getUserData",
+  version: "v1",
+  data: { userId: "123" },
+});
+```
+
+AI self-check before finalizing changes:
+
+- Did I rely on generated route/version types?
+- Did I avoid adding new unsafe wrappers?
+- If I used a temporary cast during generation lag, did I re-check and remove it after types refreshed?
 
 ---
 

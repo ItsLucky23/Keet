@@ -1,12 +1,11 @@
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { backendUrl, loginRedirectUrl, loginPageUrl, providers, SessionLayout } from "config";
+import { backendUrl, loginRedirectUrl, loginPageUrl, providers, SessionLayout, sessionBasedToken } from "config";
 import tryCatch from "shared/tryCatch";
 
 import notify from "../_functions/notify";
 import { useTranslator } from "../_functions/translator";
-const env = import.meta.env;
 
 export default function LoginForm({ formType }: { formType: "login" | "register" }) {
   const translate = useTranslator();
@@ -60,7 +59,18 @@ export default function LoginForm({ formType }: { formType: "login" | "register"
         body: JSON.stringify({ name, email, password, confirmPassword, provider }),
         credentials: "include",
       });
-      return (await res.json()) as { status: boolean; reason: string, newToken: string | null, session: SessionLayout | undefined };
+      const sessionToken = res.headers.get("x-session-token");
+      const body = (await res.json()) as {
+        status: boolean;
+        reason: string;
+        session: SessionLayout | undefined;
+        authenticated?: boolean;
+      };
+
+      return {
+        ...body,
+        sessionToken,
+      };
     };
 
     const [error, response] = await tryCatch(fetchUser);
@@ -72,17 +82,20 @@ export default function LoginForm({ formType }: { formType: "login" | "register"
     }
 
     if (!response.status) {
-      notify.error({ key: response.reason });
+      const reasonKey = typeof response.reason === 'string' && response.reason.length > 0
+        ? response.reason
+        : 'api.internalServerError';
+      notify.error({ key: reasonKey });
       setLoading(false);
       return;
     }
 
     notify.success({ key: response.reason });
     setTimeout(() => {
-      if (response.newToken && env.VITE_SESSION_BASED_TOKEN == 'true') {
-        sessionStorage.setItem("token", response.newToken);
+      if (response.sessionToken && sessionBasedToken) {
+        sessionStorage.setItem("token", response.sessionToken);
       }
-      globalThis.location.href = response.newToken ? loginRedirectUrl : loginPageUrl;
+      globalThis.location.href = response.authenticated ? loginRedirectUrl : loginPageUrl;
     }, 1000);
   };
 

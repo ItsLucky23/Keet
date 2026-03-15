@@ -1,13 +1,13 @@
-import { devSyncs, devFunctions } from "../dev/loader";
 import { syncs, functions } from '../prod/generatedApis';
 import { ioInstance } from "./socket";
 import { getSession } from "../functions/session";
-import { SessionLayout } from "../../config";
+import config, { SessionLayout } from "../../config";
 import { validateRequest } from "../utils/validateRequest";
 import { extractTokenFromSocket } from "../utils/extractToken";
 import tryCatch from "../../shared/tryCatch";
 import { extractLanguageFromHeader, normalizeErrorResponse } from "../utils/responseNormalizer";
 import { validateInputByType } from '../utils/runtimeTypeValidation';
+import { checkRateLimit } from '../utils/rateLimiter';
 
 interface HttpSyncRequestParams {
   name: string;
@@ -16,6 +16,7 @@ interface HttpSyncRequestParams {
   receiver: string;
   ignoreSelf?: boolean;
   token: string | null;
+  requesterIp?: string;
   xLanguageHeader?: string | string[];
   acceptLanguageHeader?: string | string[];
 }
@@ -28,7 +29,20 @@ type HttpSyncResponse = {
   httpStatus?: number;
 };
 
-const functionsObject = process.env.NODE_ENV == 'development' ? devFunctions : functions;
+const getRuntimeSyncMaps = async () => {
+  if (process.env.NODE_ENV !== 'production') {
+    const { devSyncs, devFunctions } = await import('../dev/loader');
+    return {
+      syncObject: devSyncs,
+      functionsObject: devFunctions,
+    };
+  }
+
+  return {
+    syncObject: syncs,
+    functionsObject: functions,
+  };
+};
 
 export default async function handleHttpSyncRequest({
   name,
@@ -37,6 +51,7 @@ export default async function handleHttpSyncRequest({
   receiver,
   ignoreSelf,
   token,
+  requesterIp,
   xLanguageHeader,
   acceptLanguageHeader,
 }: HttpSyncRequestParams): Promise<HttpSyncResponse> {
@@ -104,7 +119,7 @@ export default async function handleHttpSyncRequest({
     });
   }
 
-  const syncObject = process.env.NODE_ENV == 'development' ? devSyncs : syncs;
+  const { syncObject, functionsObject } = await getRuntimeSyncMaps();
   const nameSegments = name.split('/').filter(Boolean);
   const syncBaseName = nameSegments[nameSegments.length - 2];
   const requestedVersion = nameSegments[nameSegments.length - 1];
@@ -128,11 +143,59 @@ export default async function handleHttpSyncRequest({
     });
   }
 
+  // Rate limiting for HTTP sync requests
+  const effectiveSyncLimit = config.rateLimiting.defaultApiLimit;
+  if (effectiveSyncLimit !== false && effectiveSyncLimit > 0) {
+    const requesterIdentity = token ?? requesterIp ?? 'anonymous';
+    const keyPrefix = token ? 'token' : 'ip';
+
+    const { allowed, resetIn } = checkRateLimit({
+      key: `${keyPrefix}:${requesterIdentity}:sync:${resolvedName}`,
+      limit: effectiveSyncLimit,
+      windowMs: config.rateLimiting.windowMs,
+    });
+
+    if (!allowed) {
+      return buildSyncError({
+        response: {
+          status: 'error',
+          errorCode: 'sync.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+          httpStatus: 429,
+        },
+        preferred: preferredLocale,
+        userLanguage: user?.language,
+      });
+    }
+  }
+
+  if (config.rateLimiting.defaultIpLimit !== false && config.rateLimiting.defaultIpLimit > 0) {
+    const ipBucket = requesterIp ?? 'unknown';
+    const { allowed, resetIn } = checkRateLimit({
+      key: `ip:${ipBucket}:sync:all`,
+      limit: config.rateLimiting.defaultIpLimit,
+      windowMs: config.rateLimiting.windowMs,
+    });
+
+    if (!allowed) {
+      return buildSyncError({
+        response: {
+          status: 'error',
+          errorCode: 'sync.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+          httpStatus: 429,
+        },
+        preferred: preferredLocale,
+        userLanguage: user?.language,
+      });
+    }
+  }
+
   let serverOutput = {};
   if (syncObject[`${resolvedName}_server`]) {
     const { auth, main: serverMain, inputType, inputTypeFilePath } = syncObject[`${resolvedName}_server`];
 
-    const inputValidation = validateInputByType({
+    const inputValidation = await validateInputByType({
       typeText: inputType,
       value: data,
       rootKey: 'clientInput',
@@ -219,14 +282,13 @@ export default async function handleHttpSyncRequest({
     if (!tempSocket) continue;
 
     const tempToken = extractTokenFromSocket(tempSocket);
-    const targetUser = await getSession(tempToken);
 
     if (ignoreSelf && token && token === tempToken) {
       continue;
     }
 
     if (syncObject[`${resolvedName}_client`]) {
-      const [clientSyncError, clientSyncResult] = await tryCatch(async () => await syncObject[`${resolvedName}_client`]({ clientInput: data, user: targetUser, functions: functionsObject, serverOutput, roomCode: receiver }));
+      const [clientSyncError, clientSyncResult] = await tryCatch(async () => await syncObject[`${resolvedName}_client`]({ clientInput: data, token: tempToken, functions: functionsObject, serverOutput, roomCode: receiver }));
       if (clientSyncError) {
         tempSocket.emit('sync', {
           cb: callbackName,
@@ -234,7 +296,6 @@ export default async function handleHttpSyncRequest({
           ...buildSyncError({
             response: { status: 'error', errorCode: 'sync.clientExecutionFailed' },
             preferred: extractLanguageFromHeader(tempSocket.handshake.headers['accept-language'] || tempSocket.handshake.headers['x-language']),
-            userLanguage: targetUser?.language,
           }),
         });
         continue;
@@ -247,7 +308,6 @@ export default async function handleHttpSyncRequest({
           ...buildSyncError({
             response: ensureSyncErrorShape(clientSyncResult),
             preferred: extractLanguageFromHeader(tempSocket.handshake.headers['accept-language'] || tempSocket.handshake.headers['x-language']),
-            userLanguage: targetUser?.language,
           }),
         });
         continue;
@@ -260,7 +320,6 @@ export default async function handleHttpSyncRequest({
           ...buildSyncError({
             response: { status: 'error', errorCode: 'sync.invalidClientResponse' },
             preferred: extractLanguageFromHeader(tempSocket.handshake.headers['accept-language'] || tempSocket.handshake.headers['x-language']),
-            userLanguage: targetUser?.language,
           }),
         });
         continue;

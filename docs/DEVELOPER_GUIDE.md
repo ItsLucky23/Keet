@@ -99,7 +99,7 @@ luckystack/
 
 - Runtime/server path constants are centralized in `server/utils/paths.ts`.
 - Use these constants for filesystem paths (uploads, public, generated files, server functions) instead of hardcoding `process.cwd()` joins.
-- Alias resolution source of truth is TypeScript config paths (`tsconfig.server.json` and `tsconfig.app.json`).
+- Alias resolution source of truth is TypeScript config paths (`tsconfig.server.json` and `tsconfig.client.json`).
 - `vite.config.ts` uses `vite-tsconfig-paths`, and server runtime type resolution reuses those same tsconfig path mappings.
 
 ---
@@ -214,7 +214,14 @@ The dev server watches for file changes and automatically:
 3. **Function files** (`server/functions/*.ts`, `shared/*.ts`) - Reloads functions and regenerates `apiTypes.generated.ts`
 4. **Components** - Vite HMR handles the rest
 
-Just save and your types are updated!
+Type regeneration is asynchronous and can lag briefly (usually hundreds of milliseconds).
+
+Timing-aware workflow:
+
+1. First pass: write against intended route literals and generated helper contracts.
+2. Wait/re-check pass: after generation settles, remove any temporary casts/narrowing added during the lag window.
+
+Just save and your types are updated.
 
 ---
 

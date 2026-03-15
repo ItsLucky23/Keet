@@ -2,24 +2,52 @@ import dotenv from 'dotenv';
 import { initializeSentry } from './functions/sentry';
 import path from 'path';
 
-dotenv.config();
+dotenv.config({ path: [".env.local", ".env"] });
 initializeSentry();
 
 import http from 'http';
 import getParams from './utils/getParams';
-import { loginWithCredentials, loginCallback } from './auth/login';
+import { loginWithCredentials, loginCallback, createOAuthState } from './auth/login';
 import { serveFavicon, serveFile } from './prod/serveFile';
 import loadSocket from './sockets/socket';
 import z from 'zod';
 import oauthProviders from "./auth/loginConfig";
 import { deleteSession } from './functions/session';
 import allowedOrigin from './auth/checkOrigin';
-import { SessionLayout } from '../config';
+import config, { SessionLayout } from '../config';
 
 import { extractTokenFromRequest } from './utils/extractTokenFromRequest';
 import { handleHttpApiRequest } from './sockets/handleHttpApiRequest';
 import handleHttpSyncRequest from './sockets/handleHttpSyncRequest';
 import { ensureMediaRoots, serveUploadAsset } from './media/mediaLibrary';
+import { checkRateLimit } from './utils/rateLimiter';
+
+const REDACTED_LOG_KEYS = new Set([
+  'password',
+  'confirmPassword',
+  'token',
+  'authorization',
+  'cookie',
+  'clientSecret',
+  'access_token',
+  'refresh_token',
+]);
+
+const sanitizeForLog = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForLog);
+  }
+
+  if (value && typeof value === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      output[key] = REDACTED_LOG_KEYS.has(key) ? '[REDACTED]' : sanitizeForLog(val);
+    }
+    return output;
+  }
+
+  return value;
+};
 
 const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
 
@@ -34,6 +62,7 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Expose-Headers", "X-Session-Token");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader('Referrer-Policy', 'no-referrer'); // prevents the browser from leaking sensative urls
   res.setHeader('X-Frame-Options', 'SAMEORIGIN'); // only allows iframes to use this pages content if on the same domain
@@ -61,7 +90,6 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
     .find(row => row.startsWith('token='))
     ?.split('=')[1];
 
-
   //? here we load the application icon
   if (z.literal('/favicon.ico').safeParse(routePath).success) {
     return serveFavicon(res);
@@ -73,21 +101,26 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
   let params: object | null;
   params = await getParams({ method, req, res, queryString });
 
+  if (res.writableEnded) {
+    return;
+  }
+
   //? we log the request and if there are any params we log them with the request
   if (params && typeof params == 'object' && Object.keys(params).length !== 0) {
+    const safeParams = sanitizeForLog(params);
     const isUploadApi = routePath === '/api/upload/uploadFiles/v1';
-    if (isUploadApi && Array.isArray((params as any).files)) {
+    if (isUploadApi && Array.isArray((safeParams as any).files)) {
       console.log(
         `method: ${method}, url: ${routePath}, params: ${JSON.stringify({
-          folder: (params as any).folder,
-          replaceTarget: (params as any).replaceTarget,
-          markAsExtra: (params as any).markAsExtra,
-          filesCount: (params as any).files.length,
+          folder: (safeParams as any).folder,
+          replaceTarget: (safeParams as any).replaceTarget,
+          markAsExtra: (safeParams as any).markAsExtra,
+          filesCount: (safeParams as any).files.length,
         })}`,
         'magenta'
       );
     } else {
-      console.log(`method: ${method}, url: ${routePath}, params: ${JSON.stringify(params)}`, 'magenta')
+      console.log(`method: ${method}, url: ${routePath}, params: ${JSON.stringify(safeParams)}`, 'magenta')
     }
   } else {
     console.log(`method: ${method}, url: ${routePath}`, 'magenta');
@@ -108,10 +141,42 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
     if (!provider || !provider.name) { return { provider, status: false, reason: 'login.providerNotFound' }; }
 
     if (provider?.name != 'credentials' && 'scope' in provider) {
+      const oauthState = await createOAuthState(provider.name);
+      if (!oauthState) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({
+          status: false,
+          reason: 'login.oauthStateInitFailed',
+        }));
+      }
+
+      const clientId = encodeURIComponent(provider.clientID);
+      const callbackUrl = encodeURIComponent(provider.callbackURL);
+      const scope = encodeURIComponent(provider.scope.join(' '));
+      const state = encodeURIComponent(oauthState);
+
       res.writeHead(302, {
-        'Location': `${provider.authorizationURL}?client_id=${provider.clientID}&redirect_uri=${provider.callbackURL}&scope=${provider.scope.join('%20')}&response_type=code&prompt=select_account`,
+        'Location': `${provider.authorizationURL}?client_id=${clientId}&redirect_uri=${callbackUrl}&scope=${scope}&response_type=code&prompt=select_account&state=${state}`,
       });
       return res.end();
+    }
+
+    if (config.rateLimiting.defaultApiLimit !== false && config.rateLimiting.defaultApiLimit > 0) {
+      const requesterIp = req.socket.remoteAddress ?? 'unknown';
+      const { allowed, resetIn } = checkRateLimit({
+        key: `ip:${requesterIp}:auth:credentials`,
+        limit: config.rateLimiting.defaultApiLimit,
+        windowMs: config.rateLimiting.windowMs,
+      });
+
+      if (!allowed) {
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+        return res.end(JSON.stringify({
+          status: false,
+          reason: 'api.rateLimitExceeded',
+          errorParams: [{ key: 'seconds', value: resetIn }],
+        }));
+      }
     }
 
     //? here all the logic happends for login or creating an account with credentials
@@ -124,22 +189,30 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
 
     //? if it failed to either login or creating an account then we return
     if (!status) {
+      const reasonKey = typeof reason === 'string' && reason.length > 0
+        ? reason
+        : 'api.internalServerError';
       res.setHeader("content-type", "application/json; charset=utf-8");
-      return res.end(JSON.stringify({ status, reason: reason || 'internal server error' }));
+      return res.end(JSON.stringify({ status, reason: reasonKey }));
     }
 
     //? if it was successful then we apply the cookie and return the user id and reason for the login or account creation
     if (newToken) {
       if (token) { await deleteSession(token); }
 
-      console.log('setting cookie with newToken: ', newToken, 'green');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('setting cookie with new token', 'green');
+      }
       const cookieOptions = `HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; ${process.env.SECURE == 'true' ? "Secure;" : ""}`
 
       res.setHeader("Set-Cookie", `token=${newToken}; ${cookieOptions}`);
+      if (config.sessionBasedToken) {
+        res.setHeader("X-Session-Token", newToken);
+      }
       // return res.end(JSON.stringify({ status, reason, session })) 
       // } else { 
     }
-    return res.end(JSON.stringify({ status, reason, session, newToken }))
+    return res.end(JSON.stringify({ status, reason, session, authenticated: Boolean(newToken) }))
 
   } else if (z.string().startsWith('/auth/callback').safeParse(routePath).success) {
     //? this endpoint is triggerd by the oauth provider after the user has logged in
@@ -157,12 +230,14 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
     if (token) { await deleteSession(token); }
 
     //? we set the cookie with the new token and redirect the user to the frontend
-    console.log('setting cookie with newToken: ', newToken, 'green');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('setting cookie or redirect with new token', 'green');
+    }
     const cookieOptions = `HttpOnly; SameSite=Strict; Path=/; Max-Age=604800; ${process.env.SECURE == 'true' ? "Secure;" : ""}`
 
     const location = process.env.DNS
 
-    if (process.env.VITE_SESSION_BASED_TOKEN == 'true') {
+    if (config.sessionBasedToken && config.dev) {
       res.writeHead(302, {
         Location: `${process.env.DNS}?token=${newToken}`,
       });
@@ -199,6 +274,7 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
         name: apiName,
         data: apiData,
         token: httpToken,
+        requesterIp: req.socket.remoteAddress ?? undefined,
         xLanguageHeader: req.headers['x-language'],
         acceptLanguageHeader: req.headers['accept-language'],
         method: (method as 'GET' | 'POST' | 'PUT' | 'DELETE') || 'POST'
@@ -253,6 +329,7 @@ const ServerRequest = async (req: http.IncomingMessage, res: http.ServerResponse
         receiver: (syncParams as any).receiver,
         ignoreSelf: (syncParams as any).ignoreSelf,
         token: httpToken,
+        requesterIp: req.socket.remoteAddress ?? undefined,
         xLanguageHeader: req.headers['x-language'],
         acceptLanguageHeader: req.headers['accept-language'],
       });

@@ -24,10 +24,7 @@ dist-ssr
 *.sln
 *.sw?
 
-config.ts
-config
-
-uploads/**
+uploads/*
 
 # Auto-generated types (regenerated on dev server start)
 apiTypes.generated.ts

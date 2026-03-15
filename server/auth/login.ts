@@ -13,6 +13,7 @@ import path from 'path';
 import { existsSync } from 'fs';
 import tryCatch from '../../shared/tryCatch';
 import { UPLOADS_DIR } from '../utils/paths';
+import redis from '../functions/redis';
 
 dotenv.config();
 
@@ -24,12 +25,70 @@ type paramsType = {
 }
 
 const uploadsFolder = UPLOADS_DIR;
+const OAUTH_STATE_TTL_SECONDS = 60 * 10;
+const isDevMode = process.env.NODE_ENV === 'development';
+
+const getOAuthStateKey = (providerName: string, state: string): string => {
+  const projectName = process.env.PROJECT_NAME || 'luckystack';
+  return `${projectName}-oauth-state:${providerName}:${state}`;
+};
+
+export const createOAuthState = async (providerName: string): Promise<string | null> => {
+  const state = randomBytes(32).toString('hex');
+  const key = getOAuthStateKey(providerName, state);
+  const result = await redis.set(key, '1', 'EX', OAUTH_STATE_TTL_SECONDS, 'NX');
+
+  if (result !== 'OK') {
+    return null;
+  }
+
+  return state;
+};
+
+const consumeOAuthState = async (providerName: string, state: string): Promise<boolean> => {
+  if (!state) {
+    return false;
+  }
+
+  const key = getOAuthStateKey(providerName, state);
+  const txResult = await redis.multi().get(key).del(key).exec();
+  if (!txResult || txResult.length < 2) {
+    return false;
+  }
+
+  const getResult = txResult[0];
+  if (!getResult || getResult[0]) {
+    return false;
+  }
+
+  return getResult[1] === '1';
+};
 
 const asRecord = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object') {
     return value as Record<string, any>;
   }
   return {};
+};
+
+const sanitizeUserForSession = <T extends { password?: unknown }>(user: T): Omit<T, 'password'> => {
+  const { password: _password, ...safeUser } = user;
+  return safeUser;
+};
+
+const toReasonKey = (error: unknown, fallback = 'api.internalServerError'): string => {
+  if (typeof error === 'string' && error.length > 0) {
+    return error;
+  }
+
+  if (error instanceof Error && error.message) {
+    const message = error.message.toLowerCase();
+    if (message.includes('authentication failed') || message.includes('scram failure')) {
+      return 'api.internalServerError';
+    }
+  }
+
+  return fallback;
 };
 
 // Route that starts the OAuth flow for the specified provider and redirects to the callback endpoint
@@ -40,7 +99,9 @@ const loginWithCredentials = async (params: paramsType) => {
   const name = params.name ? validator.escape(params.name) : undefined;
   const confirmPassword = params.confirmPassword ? validator.escape(params.confirmPassword) : undefined;
 
-  console.log(name, email, password, confirmPassword)
+  if (isDevMode) {
+    console.log(`credentials auth attempt for ${email || 'unknown-email'}`, 'gray');
+  }
 
   if (!email || !password) { return { status: false, reason: 'login.empty' }; }
   if (email.length > 191) { return { status: false, reason: 'login.emailCharacterLimit' }; }
@@ -65,9 +126,9 @@ const loginWithCredentials = async (params: paramsType) => {
     const [checkEmailError, checkEmailResponse] = await tryCatch(checkEmail);
     if (checkEmailError) {
       console.log(checkEmailError);
-      return { status: false, reason: checkEmailError };
+      return { status: false, reason: toReasonKey(checkEmailError) };
     }
-    if (checkEmailResponse) { return { status: false, reason: 'login.emailExist' }; }
+    if (checkEmailResponse) { return { status: false, reason: 'login.emailExists' }; }
 
     //? email is not in use so we define the function to create the new user
     const createNewUser = async () => {
@@ -89,8 +150,14 @@ const loginWithCredentials = async (params: paramsType) => {
 
     //? here we create the new user
     const [createNewUserError, createNewUserResponse] = await tryCatch(createNewUser);
-    if (createNewUserError) { return { status: false, reason: createNewUserError }; }
-    if (createNewUserResponse) { return { status: true, reason: 'login.userCreated', session: createNewUserResponse }; }
+    if (createNewUserError) { return { status: false, reason: toReasonKey(createNewUserError) }; }
+    if (createNewUserResponse) {
+      return {
+        status: true,
+        reason: 'login.userCreated',
+        session: sanitizeUserForSession(createNewUserResponse),
+      };
+    }
     return { status: false, reason: 'login.createUserFailed' };
 
   } else { //? login
@@ -108,7 +175,7 @@ const loginWithCredentials = async (params: paramsType) => {
     const [findUserError, findUserResponse] = await tryCatch(findUser);
     if (findUserError) {
       console.log(findUserError, ' findUserError');
-      return { status: false, reason: findUserError };
+      return { status: false, reason: toReasonKey(findUserError) };
     }
     if (!findUserResponse) { return { status: false, reason: 'login.userNotFound' }; }
 
@@ -138,8 +205,8 @@ const loginWithCredentials = async (params: paramsType) => {
       //   language: findUserResponse.language,
       //   theme: findUserResponse.theme
       // };
-      const newUser = {
-        ...findUserResponse,
+      const newUser: SessionLayout = {
+        ...sanitizeUserForSession(findUserResponse),
         token: newToken,
       }
           
@@ -150,7 +217,9 @@ const loginWithCredentials = async (params: paramsType) => {
       }
 
       await saveSession(newToken, newUser, true);
-      console.log(newUser);
+      if (isDevMode) {
+        console.log(`credentials login success for user ${newUser.id}`, 'green');
+      }
       return { status: true, reason: 'login.loggedIn', newToken, session: newUser };
     }
   }
@@ -167,6 +236,13 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
   const queryString = req.url.split('?')[1]; // Get the part after '?'
   const params = new URLSearchParams(queryString);
   const code = params.get('code');
+  const state = params.get('state');
+
+  const stateIsValid = await consumeOAuthState(provider.name, state || '');
+  if (!stateIsValid) {
+    console.log('invalid or missing oauth state');
+    return false;
+  }
 
   //? if no code provided in the url we return false (the code is used to get the access token and should be provided by the oauth provider)
   if (!code || code == '') {
@@ -204,7 +280,9 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
       params.append('grant_type', 'authorization_code');
       params.append('redirect_uri', provider.callbackURL);
 
-      console.log(params)
+      if (isDevMode) {
+        console.log(params)
+      }
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -293,7 +371,6 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
       return false;
     }
 
-    console.log('ASDSADASDDASDA')
     //? if the user exists we assign it to the tempUser variable
     if (userDataResponse?.id) {
       // const { password, ...safeData } = userDataResponse;
@@ -303,7 +380,7 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
       }
 
       tempUser = {
-        ...userDataResponse,
+        ...sanitizeUserForSession(userDataResponse),
         token: ''
       };
     }
@@ -331,7 +408,7 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
 
       if (createNewUserResponse) {
         tempUser = {
-          ...createNewUserResponse,
+          ...sanitizeUserForSession(createNewUserResponse),
           token: ''
         };
       }
@@ -355,7 +432,9 @@ const loginCallback = async (pathname: string, req: IncomingMessage, _res: Serve
 
   tempUser.token = newToken;
   await saveSession(newToken, tempUser, true);
-  console.log(tempUser)
+  if (isDevMode) {
+    console.log(`oauth login success for user ${tempUser.id}`, 'green');
+  }
   return newToken;
 }
 
